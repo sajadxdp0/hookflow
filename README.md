@@ -1,6 +1,6 @@
 # HookFlow
 
-[![ci](https://github.com/sajadinmaker/hookflow/actions/workflows/ci.yml/badge.svg)](https://github.com/sajadinmaker/hookflow/actions/workflows/ci.yml)
+[![ci](https://github.com/sajadxdp/hookflow/actions/workflows/ci.yml/badge.svg)](https://github.com/sajadxdp/hookflow/actions/workflows/ci.yml)
 
 **Webhooks that survive your customer's worst day.**
 
