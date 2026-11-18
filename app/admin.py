@@ -8,6 +8,8 @@ it is a vulnerability.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -57,6 +59,7 @@ class ApiKeyCreated(BaseModel):
 def require_admin(
     x_admin_token: str | None = Header(default=None, alias=ADMIN_TOKEN_HEADER),
 ) -> None:
+    """Fail closed when the admin token is unset or does not match."""
     expected = get_settings().admin_token
     if not expected:
         raise HTTPException(
@@ -72,7 +75,8 @@ def require_admin(
         )
 
 
-def build_admin_router(get_db) -> APIRouter:
+def build_admin_router(get_db: Callable[[], Session]) -> APIRouter:
+    """Build the token-guarded tenant and API-key provisioning router."""
     router = APIRouter(prefix="/v1/admin", dependencies=[Depends(require_admin)])
 
     @router.post("/tenants", status_code=201, response_model=TenantOut)

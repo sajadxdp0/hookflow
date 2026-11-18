@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from fastapi import Depends, Header, HTTPException, status
@@ -129,11 +130,10 @@ def authenticate(db: Session, authorization: str | None) -> Principal:
     )
 
 
-def build_principal_dependency(get_db):
+def build_principal_dependency(get_db: Callable) -> Callable[..., Principal]:
     """Build the FastAPI dependency that authenticates a bearer token.
 
-    A factory rather than a module-level constant because the dependency needs
-    this app's `get_db`, and importing app.main from here would be a cycle.
+    A factory so callers can supply their own ``get_db`` dependency.
     """
 
     def require_principal(

@@ -1,273 +1,28 @@
 # HookFlow
 
-[![ci](https://github.com/sajadxdp/hookflow/actions/workflows/ci.yml/badge.svg)](https://github.com/sajadxdp/hookflow/actions/workflows/ci.yml)
+Webhooks that survive a flaky receiver.
 
-**Webhooks that survive your customer's worst day.**
+Events are persisted before delivery, then sent signed with backoff, idempotency keys, per-endpoint rate limits, and a dead-letter queue with one-click replay. A failing consumer becomes a retry instead of a lost event.
 
-Newsletter receivers time out, SaaS endpoints 500, consumers redeploy mid-delivery. HookFlow accepts each event durably *first*, then delivers it signed, with exponential backoff, idempotency keys, per-endpoint rate limits, and a dead-letter queue with one-click replay. A flaky consumer degrades into a scheduled retry instead of a lost event.
+Python · FastAPI · PostgreSQL · Redis · Next.js
 
-| | |
-|---|---|
-| Stack | Python, FastAPI, PostgreSQL, optional Redis; Next.js operator dashboard |
-| Correctness | 79 tests, 93% coverage, mutation-verified concurrency tests |
-| CI | Every push runs the suite on SQLite, PostgreSQL, and Redis |
-| Dev mode | Zero external services: SQLite, in-process queue, published dev key that `/ready` flags |
-
-**Where to look first**
-
-- `app/worker.py` — the claim-and-lease delivery loop (PostgreSQL `SKIP LOCKED`, expired-lease rescue)
-- `app/crypto.py` — webhook payloads signed with HMAC-SHA256; secrets Fernet-encrypted at rest
-- `tests/test_correctness.py` — the concurrency tests that are designed to fail if the protection regresses
-- `scripts/load_test.py` — benchmark over the full authed ingest path (362.6 rps measured, details below)
-
-## Demo
-
-![HookFlow end-to-end demo](docs/demo.gif)
-
-Recorded live from this repo with no external services: migrations, server boot, admin tenant + API key, endpoint registration, ingest, and two submissions sharing an `Idempotency-Key` — the duplicate gets the same `201` and the same event id back, and stats reports `queued: 1`.
-
-## Problem
-
-Webhook receivers time out, return 5xx, and go away mid-deploy. Producers that
-POST inline lose events on any transient failure, and have no way to replay
-them or prove to the receiver that a payload was not tampered with.
-
-## Approach
-
-Persist-first ingest, asynchronous signed delivery, exponential backoff,
-idempotency keys, per-endpoint rate limits, and a dead-letter state with full
-delivery history and replay.
-
-```text
-Client
-  ↓
-FastAPI  ── persist Event + Delivery (one durable transaction)
-  ↓
-PostgreSQL          ← source of truth
-  ↓
-Redis list          ← wake-up hint only (LPUSH after commit)
-  ↓
-Worker
-  ↓
-Endpoint  (X-Hookflow-Signature: sha256=HMAC(secret, body))
-```
-
-## Design decisions
-
-**Persist before enqueue.** An event is only acknowledged after the Event and
-Delivery rows are committed. Redis is pushed to *afterwards*, purely as a
-wake-up hint — the worker also polls due rows, so losing a Redis message costs
-latency, never an event. This is why Redis can be optional without correctness
-becoming conditional on it.
-
-**At-least-once, made safe by idempotency keys.** Exactly-once delivery is not
-achievable over HTTP to a third party. Instead, callers may send an
-`Idempotency-Key`; a `UNIQUE (endpoint_id, idempotency_key)` constraint makes
-duplicate acceptance impossible at the database level, so two concurrent
-ingests cannot both insert. The loser of that race catches the `IntegrityError`
-and returns the winner's event rather than a 500.
-
-**Secrets encrypted at rest, not hashed.** A webhook secret is *shared*: the
-receiver verifies a signature we produce, so the server must reproduce the
-exact bytes at signing time. A one-way hash can verify an inbound credential but
-can never sign an outbound payload, so hashing would break delivery outright.
-Stored value is a Fernet envelope (`enc:v1:<token>`); plaintext exists only in
-memory for the duration of one signing call. Key access sits behind a
-`KeyProvider` with a single method, so AWS KMS or Vault can replace it without
-touching call sites or stored data. A generated secret is returned exactly once,
-at creation, because otherwise the receiver could never verify anything.
-
-**Schema owned by migrations.** Tables are created by `alembic upgrade head` as
-a deploy step, never implicitly at boot. Booting and mutating schema in the same
-process is how replicas end up racing DDL, and it hides the fact that a
-migration was never written. `alembic check` runs in CI, so a model change
-without a matching migration fails the build.
-
-**Workers claim what they deliver.** Selecting due rows and then updating them
-is not safe with more than one worker: both can read the same free row before
-either writes, and both POST it. Claiming is a single
-`UPDATE ... WHERE id IN (subquery)` that excludes rows already held under a live
-lease — one statement, so the database serialises racers and the loser's
-subquery re-evaluates against the winner's committed rows. PostgreSQL adds
-`FOR UPDATE SKIP LOCKED` so workers do not queue behind each other. Leases
-expire, so a worker that dies mid-delivery cannot strand a row.
-
-**Tenants are a query filter, not a convention.** An API key resolves to
-exactly one tenant and that tenant is applied to every query. Endpoints carry a
-`NOT NULL` foreign key. Cross-tenant access answers `404`, never `403` — a `403`
-would confirm that an id exists, which is itself a leak.
-
-## API
-
-All tenant-scoped routes require `Authorization: Bearer hf_<prefix>_<secret>`.
+## Run
 
 ```bash
-# provision (requires HOOKFLOW_ADMIN_TOKEN; 503 when unset)
-curl -X POST localhost:8000/v1/admin/tenants \
-  -H 'X-Admin-Token: dev' -H 'Content-Type: application/json' \
-  -d '{"name":"acme"}'
-curl -X POST localhost:8000/v1/admin/tenants/$TENANT/keys \
-  -H 'X-Admin-Token: dev' -H 'Content-Type: application/json' -d '{"label":"ci"}'
-
-# use
-curl -X POST localhost:8000/v1/endpoints \
-  -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
-  -d '{"url":"https://example.com/hook"}'
-```
-
-| Route | Purpose |
-|---|---|
-| `POST /v1/endpoints` | Register a destination (secret returned once) |
-| `GET /v1/endpoints` | List this tenant's endpoints |
-| `POST /v1/events` | Ingest; honours `Idempotency-Key` |
-| `GET /v1/events/{id}` | Event with delivery history |
-| `GET /v1/deliveries` | Filter by `status` / `endpoint_id` |
-| `POST /v1/deliveries/{id}/requeue` | Replay from DLQ (refuses `success` with 409) |
-| `GET /v1/stats` | Queue depth by status |
-| `GET /v1/admin/...` | Tenants and keys (admin token) |
-| `GET /health` `/ready` `/metrics` | Liveness, readiness, Prometheus text |
-
-## Dashboard
-
-`dashboard/` is a Next.js operator UI: queue depth, endpoints, filterable
-deliveries, DLQ with one-click replay, API keys, and metrics.
-
-It reads the API key from the server environment only. Every page is a server
-component and replay is a server action, so the key is never in the browser
-bundle — see `dashboard/README.md`.
-
-```bash
-cd dashboard && cp .env.example .env.local && npm install && npm run dev
-```
-
-## Correctness testing
-
-The test suite is aimed at the failure modes that are easy to claim and easy to
-leave untested:
-
-- **The idempotency race is mutation-verified.** Removing the unique
-  constraint from the migration makes the concurrency test fail; it is not a
-  test that passes because threads happened to serialise.
-- **A secret is proven to work end to end**: the value disclosed at creation is
-  used to recompute the HMAC the worker actually emitted.
-- Transport errors are distinguished from HTTP statuses, and a 4xx/5xx and a
-  connection failure follow different paths.
-- Deleting an endpoint mid-flight, DLQ exhaustion, and backoff saturation.
-- **Concurrent claimers receive disjoint rows.** Two threads claim the same
-  batch simultaneously and the test asserts the intersection is empty. Verified
-  against PostgreSQL with `SKIP LOCKED` as well as SQLite.
-- **Tenant isolation**, across two fixtures: a valid key from tenant B cannot
-  list, read, ingest to, or replay tenant A's resources, and gets `404` rather
-  than `403` so ids cannot be probed.
-
-Two tests are mutation-verified — they fail when the protection is removed:
-
-| Mutation | Test that catches it |
-|---|---|
-| Drop the idempotency `UNIQUE` from the migration | concurrent-ingest test |
-| `hash_api_key` returns the plaintext | key-storage test |
-
-`python -m pytest` — **79 tests**, 93% coverage on PostgreSQL. The suite runs
-green in three configurations, because the default one hides real bugs:
-
-```bash
-python -m pytest                                                  # SQLite
-REDIS_URL=redis://localhost:6379/0 python -m pytest               # + Redis
-HOOKFLOW_TEST_DATABASE_URL=postgresql+psycopg://... python -m pytest   # PostgreSQL
-```
-
-Running against PostgreSQL immediately paid for itself: encrypted secrets are
-~147 characters, which overflowed `VARCHAR(128)`. **SQLite does not enforce
-VARCHAR length, so the entire suite passed locally and endpoint registration
-would have failed on the first production deploy.** CI now runs PostgreSQL and
-Redis for exactly this reason. `app/db.py` likewise enables
-`PRAGMA foreign_keys` on SQLite, which is off by default — otherwise local runs
-silently accept rows PostgreSQL would reject.
-
-## Load benchmarking
-
-`scripts/load_test.py` provisions an admin tenant, mints an API key, and runs
-the full authed ingest path in-process, printing percentile latencies:
-
-```bash
-python scripts/load_test.py --events 300 --payload-kb 1
-```
-
-```text
-ingest: 300 events, 1KB payload | 362.6 rps | p50 2.7ms p95 3.15ms p99 3.41ms
-mean 2.76ms total 0.827s (sqlite, redis=off, TestClient in-process, single worker)
-```
-
-Measured against a throwaway SQLite database by default; point
-`--database-url`/`--redis-url` at production engines for comparable numbers.
-
-## Measured performance
-
-Numbers are measured, not estimated. Reproduce with `scripts/load_test.py`;
-see `docs/performance.md` for method and caveats.
-
-| Engine | RPS | p50 | p95 | p99 |
-|---|---|---|---|---|
-| SQLite | 112.3 | 7.5ms | 18.9ms | 24.5ms |
-| PostgreSQL 15 | 52.1–53.9 | 17.1–18.5ms | 34.0ms | 40.0–41.6ms |
-| PostgreSQL + Redis | 48.3–55.3 | 16.5–19.9ms | 34.8–35.3ms | 40.8–42.7ms |
-
-The interesting result is that PostgreSQL is ~2x *slower* per request than
-SQLite here, and that enabling Redis costs almost nothing. Ingest performs one
-durable commit per event, so with default `synchronous_commit=on` the cost is
-one `fsync` per request; Redis is a single `LPUSH` after that commit. The
-bottleneck is commit latency, and the fix is group commit, not more queueing
-machinery.
-
-These are sequential in-process measurements of per-request latency. They are
-**not** a capacity claim and exclude HTTP server, concurrency, and worker
-delivery.
-
-## Running locally
-
-```bash
-python3.11 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt -r requirements-dev.txt
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
 cp .env.example .env
-
-alembic upgrade head                 # schema is a deploy step
-uvicorn app.main:app --reload        # /docs /health /ready /metrics
-python -m app.worker                 # delivery worker, separate terminal
-
-docker compose -f docker/docker-compose.yml up --build   # full stack
+alembic upgrade head
+uvicorn app.main:app --reload
+python -m app.worker
 ```
 
-Set `SECRET_ENCRYPTION_KEY` in any real deployment. With it unset, `/ready`
-reports `secret_encryption: development-key` so the mistake is visible rather
-than silent.
+`docker compose -f docker/docker-compose.yml up --build` starts the full stack, including the dashboard.
 
-## Limitations
+## Test
 
-Stated plainly, because the interesting ones are the reason for the next steps:
+```bash
+python -m pytest
+```
 
-- **Rate limiting is per-process when Redis is off**, so it is single-replica
-  only. The delivery claim is safe across replicas; the rate limiter is not.
-- **No per-tenant quotas or rate limits on the API itself.** A tenant can
-  ingest without bound; only per-endpoint delivery is limited.
-- **API keys have no expiry.** They can be revoked, but there is no TTL and no
-  rotation schedule.
-- **No tenant self-service.** Tenants and keys are admin-only; there is no
-  signup or billing path.
-- Backoff schedule is fixed at config level, not per endpoint.
-- No TLS in Compose; terminate at a load balancer.
-- **The admin token is a single shared secret.** Fine for one operator, not a
-  model for a multi-operator deployment.
-
-## Next
-
-1. Concurrent-load and worker-throughput benchmarks — the numbers here are
-   sequential per-request latency only.
-2. Group commit on the ingest path, which the measurements point at.
-3. Per-tenant API rate limits and quota enforcement.
-4. Key expiry and rotation.
-
----
-
-## Maintenance
-
-Last maintained: 2026-10-26 – load-test section added (harness now runs the authed ingest path); CI green in all jobs.
+Design notes live in [docs](docs/architecture.md).

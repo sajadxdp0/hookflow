@@ -5,8 +5,26 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, create_engine, event
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    create_engine,
+    event,
+)
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    Session,
+    mapped_column,
+    relationship,
+    sessionmaker,
+)
 
 
 def utcnow() -> datetime:
@@ -185,7 +203,8 @@ class Delivery(Base):
     endpoint: Mapped[Endpoint] = relationship(back_populates="deliveries")
 
 
-def make_engine(database_url: str):
+def make_engine(database_url: str) -> Engine:
+    """Create the one engine factory shared by every environment."""
     kwargs: dict = {"pool_pre_ping": True}
     if database_url.startswith("sqlite"):
         kwargs = {"connect_args": {"check_same_thread": False}}
@@ -203,7 +222,8 @@ def make_engine(database_url: str):
     return engine
 
 
-def make_session_factory(engine):
+def make_session_factory(engine: Engine) -> sessionmaker[Session]:
+    """Build a session factory bound to ``engine`` with stable identities."""
     return sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 

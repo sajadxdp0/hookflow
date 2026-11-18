@@ -38,6 +38,7 @@ ADMIN_TOKEN_VALUE = "load-test-admin-token"
 
 
 def _percentile(sorted_values: list[float], fraction: float) -> float:
+    """Return the value at ``fraction`` into a sorted sample (0.0 if empty)."""
     if not sorted_values:
         return 0.0
     index = min(int(len(sorted_values) * fraction), len(sorted_values) - 1)
@@ -45,6 +46,7 @@ def _percentile(sorted_values: list[float], fraction: float) -> float:
 
 
 def run(events: int, payload_kb: int, database_url: str, redis_url: str) -> dict:
+    """Provision a tenant and benchmark ``events`` ingest calls, returning stats."""
     # No URL, or an explicit sqlite://, means "use a throwaway file".
     ephemeral = not database_url or database_url.startswith("sqlite")
     if ephemeral:
