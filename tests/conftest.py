@@ -30,6 +30,31 @@ os.environ.setdefault("REDIS_URL", "")
 os.environ.setdefault("ADMIN_TOKEN", ADMIN_TOKEN)
 
 
+@pytest.fixture(autouse=True)
+def dispose_test_engines(monkeypatch):
+    """Keep engines alive for each test, then close every pooled connection."""
+    import sqlalchemy
+
+    from app import db as db_module
+
+    engines = []
+
+    def track(factory):
+        def create(*args, **kwargs):
+            engine = factory(*args, **kwargs)
+            engines.append(engine)
+            return engine
+
+        return create
+
+    monkeypatch.setattr(db_module, "create_engine", track(db_module.create_engine))
+    monkeypatch.setattr(sqlalchemy, "create_engine", track(sqlalchemy.create_engine))
+    yield
+    for engine in engines:
+        engine.dispose()
+
+
+
 def _truncate(session) -> None:
     from sqlalchemy import text
 

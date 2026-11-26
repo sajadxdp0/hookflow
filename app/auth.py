@@ -21,6 +21,7 @@ import hmac
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC
 
 from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
@@ -54,12 +55,14 @@ def hash_api_key(plaintext: str) -> str:
 
 
 def split_key(plaintext: str) -> tuple[str, str] | None:
-    """Return (prefix, secret) if the key is well-formed, else None."""
+    """Return (prefix, secret) only for the exact generated key shape."""
     parts = plaintext.split("_", 2)
     if len(parts) != 3 or parts[0] != KEY_NAMESPACE:
         return None
     prefix, secret = parts[1], parts[2]
-    if not prefix or not secret:
+    if len(prefix) != PREFIX_LENGTH or len(secret) != SECRET_BYTES * 2:
+        return None
+    if any(character not in "0123456789abcdef" for character in prefix + secret):
         return None
     return prefix, secret
 
@@ -121,13 +124,15 @@ def authenticate(db: Session, authorization: str | None) -> Principal:
     tenant = db.get(Tenant, row.tenant_id)
     if tenant is None:  # pragma: no cover - FK prevents this
         raise AuthError("tenant no longer exists")
-
-    row.last_used_at = utcnow()
-    db.add(row)
-    db.commit()
-    return Principal(
-        tenant_id=tenant.id, tenant_name=tenant.name, api_key_id=row.id
-    )
+    now = utcnow()
+    last_used = row.last_used_at
+    if last_used is not None and last_used.tzinfo is None:
+        last_used = last_used.replace(tzinfo=UTC)
+    if last_used is None or (now - last_used).total_seconds() >= 60:
+        row.last_used_at = now
+        db.add(row)
+        db.commit()
+    return Principal(tenant_id=tenant.id, tenant_name=tenant.name, api_key_id=row.id)
 
 
 def build_principal_dependency(get_db: Callable) -> Callable[..., Principal]:

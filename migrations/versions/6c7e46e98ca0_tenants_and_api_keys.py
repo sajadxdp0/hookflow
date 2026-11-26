@@ -24,8 +24,8 @@ from __future__ import annotations
 
 import uuid
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = '6c7e46e98ca0'
 down_revision = '867af545e9dd'

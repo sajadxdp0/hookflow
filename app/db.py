@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -15,6 +16,7 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
     event,
+    true,
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import (
@@ -28,7 +30,14 @@ from sqlalchemy.orm import (
 
 
 def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
+
+
+def as_utc_iso(value: datetime) -> str:
+    """Render SQLite's naive timestamps and PostgreSQL's aware ones identically."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC).isoformat()
 
 
 class Base(DeclarativeBase):
@@ -40,12 +49,7 @@ def new_id() -> str:
 
 
 class Tenant(Base):
-    """An isolated owner of endpoints, events and deliveries.
-
-    Every tenant-scoped query filters on tenant_id. There is no "global" read
-    path: an API key resolves to exactly one tenant, and that tenant is applied
-    to every query it authorises.
-    """
+    """An isolated owner of endpoints, events and deliveries."""
 
     __tablename__ = "tenants"
 
@@ -55,25 +59,16 @@ class Tenant(Base):
         DateTime(timezone=True), nullable=False, default=utcnow
     )
 
-    endpoints: Mapped[list["Endpoint"]] = relationship(
+    endpoints: Mapped[list[Endpoint]] = relationship(
         back_populates="tenant", cascade="all, delete-orphan"
     )
-    api_keys: Mapped[list["ApiKey"]] = relationship(
+    api_keys: Mapped[list[ApiKey]] = relationship(
         back_populates="tenant", cascade="all, delete-orphan"
     )
 
 
 class ApiKey(Base):
-    """A machine credential for one tenant.
-
-    Only a SHA-256 digest of the key is stored. The plaintext is returned once at
-    creation and is unrecoverable afterwards.
-
-    A fast hash is correct here, unlike for a user password: the key is 256 bits
-    of CSPRNG output, so there is no dictionary to attack and no need for a
-    slow KDF. `key_prefix` narrows the lookup to one row, and the digest
-    comparison is constant-time.
-    """
+    """A machine credential; only a SHA-256 digest of the key is stored."""
 
     __tablename__ = "api_keys"
     __table_args__ = (
@@ -110,19 +105,18 @@ class Endpoint(Base):
         String(32), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
     )
     url: Mapped[str] = mapped_column(Text, nullable=False)
-    # Encrypted at rest (see app/crypto.py), so this holds a Fernet envelope,
-    # not the 64-char hex secret. That is ~147 characters for a generated
-    # secret, which is why this is Text and not a narrow VARCHAR: PostgreSQL
-    # enforces VARCHAR length and SQLite does not, so a tight bound here fails
-    # only in production.
+    # Fernet envelope, not the raw signing secret.
     secret: Mapped[str] = mapped_column(Text, nullable=False)
     rate_limit_per_minute: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=true()
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
     )
 
     tenant: Mapped[Tenant] = relationship(back_populates="endpoints")
-    deliveries: Mapped[list["Delivery"]] = relationship(
+    deliveries: Mapped[list[Delivery]] = relationship(
         back_populates="endpoint", cascade="all, delete-orphan"
     )
 
@@ -130,11 +124,6 @@ class Endpoint(Base):
 class Event(Base):
     __tablename__ = "events"
     __table_args__ = (
-        # Idempotency keys are scoped per endpoint. The app checks for an
-        # existing row first; this constraint closes the race where two
-        # concurrent ingests with the same key would both insert.
-        # NULL keys (no dedupe requested) are exempt — SQLite and Postgres
-        # both allow multiple NULLs in a UNIQUE constraint.
         UniqueConstraint("endpoint_id", "idempotency_key", name="uq_events_endpoint_key"),
         Index("ix_events_endpoint_created", "endpoint_id", "created_at"),
     )
@@ -143,15 +132,14 @@ class Event(Base):
     endpoint_id: Mapped[str] = mapped_column(
         String(32), ForeignKey("endpoints.id", ondelete="CASCADE"), nullable=False
     )
-    # Client-supplied idempotency key, scoped per endpoint. NULL = no dedupe requested.
     idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    payload: Mapped[str] = mapped_column(Text, nullable=False)  # raw JSON text
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
     )
 
     endpoint: Mapped[Endpoint] = relationship()
-    deliveries: Mapped[list["Delivery"]] = relationship(
+    deliveries: Mapped[list[Delivery]] = relationship(
         back_populates="event", cascade="all, delete-orphan"
     )
 
@@ -159,12 +147,9 @@ class Event(Base):
 class Delivery(Base):
     __tablename__ = "deliveries"
     __table_args__ = (
-        # Hot path for the worker: "what is due now?". Must be indexed or
-        # every poll is a full-table scan.
         Index("ix_deliveries_status_next", "status", "next_attempt_at"),
         Index("ix_deliveries_endpoint_created", "endpoint_id", "created_at"),
         Index("ix_deliveries_event", "event_id"),
-        # Supports the "unclaimed OR lease expired" half of the claim predicate.
         Index("ix_deliveries_claim", "claim_token", "claimed_at"),
     )
 
@@ -176,7 +161,6 @@ class Delivery(Base):
         String(32), ForeignKey("endpoints.id", ondelete="CASCADE"), nullable=False
     )
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
-    # queued | success | retrying | dlq
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     next_attempt_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -184,10 +168,6 @@ class Delivery(Base):
     last_status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    # Worker lease. A worker claims a due row by writing a batch-unique token;
-    # only the holder may deliver it. A crashed worker's rows become claimable
-    # again once claimed_at passes claim_lease_seconds. Without this, two
-    # workers polling concurrently both select the same row and both POST it.
     claim_token: Mapped[str | None] = mapped_column(String(32), nullable=True)
     claimed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -207,16 +187,15 @@ def make_engine(database_url: str) -> Engine:
     """Create the one engine factory shared by every environment."""
     kwargs: dict = {"pool_pre_ping": True}
     if database_url.startswith("sqlite"):
-        kwargs = {"connect_args": {"check_same_thread": False}}
+        kwargs["connect_args"] = {"check_same_thread": False, "timeout": 5}
     engine = create_engine(database_url, **kwargs)
     if database_url.startswith("sqlite"):
-        # SQLite ignores foreign keys unless asked, per connection. Without this
-        # the test/dev database accepts orphaned rows that PostgreSQL would
-        # reject, so cascade behaviour differs between local runs and production.
+
         @event.listens_for(engine, "connect")
-        def _enable_sqlite_foreign_keys(dbapi_connection, _record):  # pragma: no cover
+        def _configure_sqlite(dbapi_connection, _record) -> None:  # pragma: no cover
             cursor = dbapi_connection.cursor()
             cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.execute("PRAGMA busy_timeout=5000")
             cursor.close()
 
     return engine
@@ -227,6 +206,4 @@ def make_session_factory(engine: Engine) -> sessionmaker[Session]:
     return sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
-# NOTE: there is deliberately no init_db()/create_all() helper. Schema is owned
-# by Alembic (`alembic upgrade head`). Creating tables implicitly at import or
-# boot time is what makes "works locally, breaks in prod" schema drift possible.
+# Schema is owned by Alembic. Never create tables implicitly at boot.

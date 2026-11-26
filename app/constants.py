@@ -10,6 +10,6 @@ STATUS_DLQ = "dlq"
 # States the worker will attempt to deliver.
 RETRYABLE_STATUSES = (STATUS_QUEUED, STATUS_RETRYING)
 
-# States a caller may replay via the requeue endpoint. A successful delivery is
-# excluded: replaying it would duplicate a side effect at the receiver.
-REQUEUEABLE_STATUSES = (STATUS_DLQ, STATUS_RETRYING, STATUS_QUEUED)
+# Only terminal dead letters may be replayed. Requeueing active work races an
+# in-flight HTTP request and can duplicate receiver side effects.
+REQUEUEABLE_STATUSES = (STATUS_DLQ,)

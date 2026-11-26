@@ -1,0 +1,77 @@
+name: Feature request
+description: Propose a focused improvement to HookFlow.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem before the proposed solution. Security concerns belong in
+        [private vulnerability reporting](https://github.com/sajadxdp0/hookflow/security/advisories/new), not a public feature request.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What are you trying to accomplish, and what is difficult today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the API, configuration, dashboard, or operational behavior you want.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe workarounds or other approaches you considered.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Event ingest / API
+        - Endpoint lifecycle
+        - Worker / delivery reliability
+        - Authentication / tenants
+        - Quotas / abuse controls
+        - Security / egress
+        - Dashboard
+        - Deployment / observability
+        - Documentation
+    validations:
+      required: true
+
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and migration impact
+      description: Note any API, configuration, schema, or at-least-once delivery implications.
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add examples or references. Do not include secrets or customer data.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and discussions for this request.
+          required: true
+        - label: I understand that delivery is at-least-once and receiver idempotency remains necessary.
+          required: true

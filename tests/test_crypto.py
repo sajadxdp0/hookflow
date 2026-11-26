@@ -12,7 +12,6 @@ from app.crypto import (
     normalize_key,
 )
 
-
 # --- unit level ------------------------------------------------------------
 
 
@@ -91,8 +90,8 @@ def _register(client, url="https://example.com/wh", **kw):
 
 
 def test_secret_is_encrypted_at_rest(client):
-    from app.main import SessionLocal
     from app.db import Endpoint
+    from app.main import SessionLocal
 
     plaintext = "super-secret-value-123"
     created = _register(client, secret=plaintext)
@@ -125,12 +124,10 @@ def test_returned_secret_verifies_the_delivery_signature(client):
     import httpx
 
     from app.config import Settings
-    from app.db import Delivery, Endpoint
     from app.main import SessionLocal
-    from app.worker import process_due_deliveries
     from app.ratelimit import RateLimiter
-
     from app.security import SIGNATURE_HEADER
+    from app.worker import process_due_deliveries
 
     created = _register(client, secret="shared-signing-secret")
     client.post("/v1/events", json={"endpoint_id": created["id"], "payload": {"n": 1}})
@@ -144,9 +141,6 @@ def test_returned_secret_verifies_the_delivery_signature(client):
 
     session = SessionLocal()
     try:
-        delivery = session.query(Delivery).first()
-        endpoint = session.get(Endpoint, delivery.endpoint_id)
-        body = delivery.event.payload.encode()
         process_due_deliveries(
             session,
             Settings(database_url="sqlite://", redis_url="", secret_encryption_key=""),

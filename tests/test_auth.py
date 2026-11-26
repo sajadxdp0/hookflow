@@ -30,9 +30,16 @@ def _register(client, url="https://example.com/wh", **kw):
         {"Authorization": "Basic abc"},
         {"Authorization": "Bearer not-a-key"},
         {"Authorization": "Bearer wrongprefix_secret"},
-        {"Authorization": "Bearer hf_00000000_0000000000000000000000000000000000000000000000000000"},
+        {
+            "Authorization": (
+                "Bearer hf_00000000_" + "0" * 64
+            )
+        },
     ],
-    ids=["absent", "empty", "no-scheme", "wrong-scheme", "malformed", "wrong-namespace", "unknown-prefix"],
+    ids=[
+        "absent", "empty", "no-scheme", "wrong-scheme", "malformed",
+        "wrong-namespace", "unknown-prefix",
+    ],
 )
 def test_unauthenticated_requests_are_rejected(anon_client, headers):
     anon_client.headers.pop("Authorization", None)
@@ -155,9 +162,10 @@ def test_deleting_a_tenant_cascades_its_endpoints(client, other_client, session)
 
 
 def test_admin_disabled_without_token(prepared_db, tenant_keys):
-    from app.config import Settings, clear_settings_override
-    from app import main as main_module
     from fastapi.testclient import TestClient
+
+    from app import main as main_module
+    from app.config import Settings, clear_settings_override
 
     database_url, _ = prepared_db
     clear_settings_override()
@@ -224,7 +232,9 @@ def test_revoked_key_stops_working(client, prepared_db):
     from app.config import Settings, clear_settings_override
 
     admin = {"X-Admin-Token": "test-admin-token"}
-    tenant_id = client.post("/v1/admin/tenants", json={"name": "revoke-me"}, headers=admin).json()["id"]
+    tenant_id = client.post(
+        "/v1/admin/tenants", json={"name": "revoke-me"}, headers=admin
+    ).json()["id"]
     key = client.post(
         f"/v1/admin/tenants/{tenant_id}/keys", json={"label": "k"}, headers=admin
     ).json()
@@ -237,7 +247,7 @@ def test_revoked_key_stops_working(client, prepared_db):
         app_obj, headers={"Authorization": f"Bearer {key['api_key']}"}
     ) as c2:
         assert c2.get("/v1/endpoints").status_code == 200
-        assert c2.post("/v1/admin/keys/%s/revoke" % key["id"], headers=admin).status_code == 200
+        assert c2.post(f"/v1/admin/keys/{key['id']}/revoke", headers=admin).status_code == 200
         assert c2.get("/v1/endpoints").status_code == 401, "revoked key must be refused"
     clear_settings_override()
 

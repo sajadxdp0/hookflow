@@ -104,12 +104,18 @@ def run(events: int, payload_kb: int, database_url: str, redis_url: str) -> dict
             json={"url": "https://example.com/wh", "rate_limit_per_minute": 10000},
             headers=auth,
         )
-        assert created.status_code == 201, f"endpoint setup failed: {created.status_code} {created.text}"
+        assert created.status_code == 201, (
+            f"endpoint setup failed: {created.status_code} {created.text}"
+        )
         endpoint_id = created.json()["id"]
 
         # Warm the connection pool and the endpoint row so the first sample is
         # not paying one-off costs.
-        client.post("/v1/events", json={"endpoint_id": endpoint_id, "payload": payload}, headers=auth)
+        client.post(
+            "/v1/events",
+            json={"endpoint_id": endpoint_id, "payload": payload},
+            headers=auth,
+        )
 
         start = time.monotonic()
         for _ in range(events):

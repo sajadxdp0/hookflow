@@ -1,0 +1,20 @@
+repo:
+  description: Persist-first webhook delivery with HMAC signing, retries, tenant isolation, and dead-letter replay.
+  homepage: https://github.com/sajadxdp0/hookflow#readme
+  topics:
+    - webhooks
+    - webhook-delivery
+    - event-driven
+    - fastapi
+    - python
+    - postgresql
+    - redis
+    - async
+    - reliability
+    - self-hosted
+    - nextjs
+    - dead-letter-queue
+    - idempotency
+    - hmac
+    - developer-tools
+    - infrastructure

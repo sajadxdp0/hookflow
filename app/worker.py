@@ -1,26 +1,37 @@
-"""Delivery worker: sign, POST with timeout, retry with backoff, or DLQ."""
+"""Lease-fenced worker: sign, POST with timeout, retry, or dead-letter."""
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import httpx
+from redis import RedisError
 from sqlalchemy.orm import Session
 
+from . import __version__
 from .config import Settings
 from .constants import RETRYABLE_STATUSES, STATUS_DLQ, STATUS_RETRYING, STATUS_SUCCESS
 from .crypto import get_secret_box
 from .db import Delivery, Endpoint, utcnow
+from .egress import prepare_outbound_request, validate_endpoint_url
 from .queue import DeliveryQueue
 from .ratelimit import RateLimiter
 from .security import SIGNATURE_HEADER, sign_payload
 
+logger = logging.getLogger("hookflow.worker")
+_RETRYABLE_CLIENT_STATUSES = frozenset({408, 409, 425, 429})
+
+
+class ClaimLostError(RuntimeError):
+    """The delivery lease moved to another worker before settlement."""
+
 
 def backoff_delay_seconds(attempt: int, schedule: list[int]) -> int:
-    """Delay after a failed attempt (1-indexed). Past the schedule, repeat last."""
+    """Delay after a failed 1-indexed attempt; saturate at the final entry."""
     if attempt < 1:
         return schedule[0]
     if attempt <= len(schedule):
@@ -29,11 +40,6 @@ def backoff_delay_seconds(attempt: int, schedule: list[int]) -> int:
 
 
 def _due_conditions(now: datetime, lease_seconds: float | None):
-    """SQL conditions selecting deliveries ready for an attempt.
-
-    ``lease_seconds`` is ``None`` for the unclaimed single-worker path; when set,
-    rows held by another worker with a live lease are excluded.
-    """
     conditions = [
         Delivery.status.in_(RETRYABLE_STATUSES),
         (Delivery.next_attempt_at.is_(None)) | (Delivery.next_attempt_at <= now),
@@ -52,71 +58,62 @@ def deliver_once(
     secret: str,
     timeout_seconds: float,
     client: httpx.Client | None = None,
+    *,
+    event_id: str = "",
+    delivery_id: str = "",
+    attempt: int = 0,
 ) -> tuple[int | None, str | None, int]:
-    """POST the payload once. Returns (status_code, error, latency_ms)."""
+    """POST once. A supplied client is a trusted transport used by tests.
+
+    Production calls omit it, resolve the destination under the egress policy,
+    pin the validated IP, disable environment proxies, and refuse redirects.
+    """
     headers = {
         "Content-Type": "application/json",
         SIGNATURE_HEADER: sign_payload(secret, body),
-        "User-Agent": "hookflow/0.1.0",
+        "User-Agent": f"hookflow/{__version__}",
+        "X-Hookflow-Timestamp": datetime.now(UTC).isoformat(),
     }
+    if event_id:
+        headers["X-Hookflow-Event-Id"] = event_id
+    if delivery_id:
+        headers["X-Hookflow-Delivery-Id"] = delivery_id
+    if attempt:
+        headers["X-Hookflow-Attempt"] = str(attempt)
+
     start = time.monotonic()
     try:
         if client is not None:
-            status = client.post(url, content=body, headers=headers).status_code
+            validate_endpoint_url(url)
+            with client.stream("POST", url, content=body, headers=headers) as response:
+                status_code = response.status_code
         else:
-            with httpx.Client(timeout=timeout_seconds) as http:
-                status = http.post(url, content=body, headers=headers).status_code
+            outbound = prepare_outbound_request(url)
+            headers.update(outbound.headers)
+            with httpx.Client(
+                timeout=timeout_seconds,
+                follow_redirects=False,
+                trust_env=False,
+            ) as http:
+                with http.stream(
+                    "POST",
+                    outbound.url,
+                    content=body,
+                    headers=headers,
+                    extensions=outbound.extensions,
+                ) as response:
+                    status_code = response.status_code
         latency_ms = int((time.monotonic() - start) * 1000)
-        if 200 <= status < 300:
-            return status, None, latency_ms
-        return status, f"unexpected status {status}", latency_ms
-    except Exception as exc:  # timeouts, DNS, connection errors -> retryable
+        if 200 <= status_code < 300:
+            return status_code, None, latency_ms
+        return status_code, f"unexpected status {status_code}", latency_ms
+    except Exception as exc:  # transport, DNS, TLS and policy failures are retryable
         latency_ms = int((time.monotonic() - start) * 1000)
-        return None, f"{type(exc).__name__}: {exc}", latency_ms
-
-
-def _plan_outcome(delivery: Delivery, settings: Settings) -> None:
-    """Set the delivery's next state after an attempt has been recorded."""
-    if delivery.last_error is None:
-        delivery.status = STATUS_SUCCESS
-        delivery.next_attempt_at = None
-    elif delivery.attempts >= settings.max_attempts:
-        delivery.status = STATUS_DLQ
-        delivery.next_attempt_at = None
-    else:
-        delivery.status = STATUS_RETRYING
-        delay = backoff_delay_seconds(delivery.attempts, settings.backoff_schedule_seconds)
-        delivery.next_attempt_at = utcnow() + timedelta(seconds=delay)
-
-
-def settle_delivery(
-    session: Session,
-    settings: Settings,
-    delivery: Delivery,
-    endpoint: Endpoint,
-    body: bytes,
-    client: httpx.Client | None = None,
-) -> Delivery:
-    """Attempt one delivery and persist its outcome, retry or dead-letter."""
-    delivery.attempts += 1
-    # The stored secret is ciphertext; decrypt only here, at the moment it is
-    # needed for signing, and never write it back or log it.
-    plaintext_secret = get_secret_box(settings.secret_encryption_key).decrypt(endpoint.secret)
-    status_code, error, latency_ms = deliver_once(
-        body, endpoint.url, plaintext_secret, settings.delivery_timeout_seconds, client
-    )
-    delivery.last_status_code = status_code
-    delivery.last_error = error
-    delivery.latency_ms = latency_ms
-    _plan_outcome(delivery, settings)
-    delivery.updated_at = utcnow()
-    session.add(delivery)
-    session.commit()
-    return delivery
+        return None, f"{type(exc).__name__}: {exc}"[:2000], latency_ms
 
 
 def fetch_due_deliveries(session: Session, limit: int = 20) -> list[Delivery]:
-    """Return due rows for the single-worker path (no claim bookkeeping)."""
+    """Return due rows for the single-worker path."""
     return (
         session.query(Delivery)
         .filter(*_due_conditions(utcnow(), None))
@@ -132,13 +129,7 @@ def claim_due_deliveries(
     limit: int = 20,
     lease_seconds: float = 60.0,
 ) -> list[Delivery]:
-    """Atomically take ownership of up to ``limit`` due deliveries.
-
-    Ownership is a single UPDATE whose subquery excludes rows with a live lease:
-    the database serialises racing workers, and the loser simply finds fewer
-    candidates. On PostgreSQL the subquery uses FOR UPDATE SKIP LOCKED so workers
-    do not queue behind one another; SQLite serialises writers instead.
-    """
+    """Atomically claim up to ``limit`` due deliveries."""
     now = utcnow()
     due = (
         session.query(Delivery.id)
@@ -154,7 +145,6 @@ def claim_due_deliveries(
         synchronize_session=False,
     )
     session.commit()
-
     return (
         session.query(Delivery)
         .filter(Delivery.claim_token == token)
@@ -163,23 +153,8 @@ def claim_due_deliveries(
     )
 
 
-def release_claim(session: Session, delivery: Delivery) -> None:
-    """Drop the lease so the row is immediately claimable again."""
-    delivery.claim_token = None
-    delivery.claimed_at = None
-    session.add(delivery)
-
-
-def _release_claim_if_needed(
-    session: Session, delivery: Delivery, exclusive: bool
-) -> None:
-    """Release a lease when processing under a claim token."""
-    if exclusive:
-        release_claim(session, delivery)
-
-
 def release_expired_claims(session: Session, lease_seconds: float = 60.0) -> int:
-    """Free rows held by a worker that died mid-delivery. Returns rows freed."""
+    """Free abandoned leases. Kept as an operational/test helper."""
     stale_before = utcnow() - timedelta(seconds=lease_seconds)
     freed = (
         session.query(Delivery)
@@ -194,6 +169,104 @@ def release_expired_claims(session: Session, lease_seconds: float = 60.0) -> int
     return freed
 
 
+def _claimed_update(
+    session: Session,
+    delivery_id: str,
+    claim_token: str | None,
+    values: dict,
+) -> bool:
+    query = session.query(Delivery).filter(Delivery.id == delivery_id)
+    if claim_token is not None:
+        query = query.filter(Delivery.claim_token == claim_token)
+    changed = query.update(values, synchronize_session=False)
+    session.commit()
+    session.expire_all()
+    return bool(changed)
+
+
+def renew_claim(
+    session: Session,
+    delivery: Delivery,
+    claim_token: str,
+    lease_seconds: float,
+) -> None:
+    """Fence a serial batch: renew immediately before the network attempt."""
+    if not _claimed_update(
+        session,
+        delivery.id,
+        claim_token,
+        {Delivery.claimed_at: utcnow()},
+    ):
+        raise ClaimLostError(delivery.id)
+
+
+def settle_delivery(
+    session: Session,
+    settings: Settings,
+    delivery: Delivery,
+    endpoint: Endpoint,
+    body: bytes,
+    client: httpx.Client | None = None,
+    claim_token: str | None = None,
+) -> Delivery:
+    """Attempt one delivery and settle only if this worker still owns it."""
+    attempt = delivery.attempts + 1
+    try:
+        plaintext_secret = get_secret_box(settings.secret_encryption_key).decrypt(
+            endpoint.secret
+        )
+        status_code, error, latency_ms = deliver_once(
+            body,
+            endpoint.url,
+            plaintext_secret,
+            settings.delivery_timeout_seconds,
+            client,
+            event_id=delivery.event_id,
+            delivery_id=delivery.id,
+            attempt=attempt,
+        )
+    except Exception as exc:  # decryption/configuration failures must not kill the worker
+        status_code, error, latency_ms = None, f"{type(exc).__name__}: {exc}"[:2000], 0
+
+    permanent_failure = (
+        status_code is not None
+        and 400 <= status_code < 500
+        and status_code not in _RETRYABLE_CLIENT_STATUSES
+    )
+    if error is None:
+        status = STATUS_SUCCESS
+        next_attempt_at = None
+    elif permanent_failure or attempt >= settings.max_attempts:
+        status = STATUS_DLQ
+        next_attempt_at = None
+    else:
+        status = STATUS_RETRYING
+        delay = backoff_delay_seconds(attempt, settings.backoff_schedule_seconds)
+        next_attempt_at = utcnow() + timedelta(seconds=delay)
+
+    changed = _claimed_update(
+        session,
+        delivery.id,
+        claim_token,
+        {
+            Delivery.status: status,
+            Delivery.attempts: attempt,
+            Delivery.next_attempt_at: next_attempt_at,
+            Delivery.last_status_code: status_code,
+            Delivery.last_error: error,
+            Delivery.latency_ms: latency_ms,
+            Delivery.claim_token: None,
+            Delivery.claimed_at: None,
+            Delivery.updated_at: utcnow(),
+        },
+    )
+    if not changed:
+        raise ClaimLostError(delivery.id)
+    settled = session.get(Delivery, delivery.id)
+    assert settled is not None
+    return settled
+
+
 def process_due_deliveries(
     session: Session,
     settings: Settings,
@@ -202,44 +275,90 @@ def process_due_deliveries(
     limit: int = 20,
     claim_token: str | None = None,
 ) -> dict[str, int]:
-    """Run one worker pass, returning counts by outcome.
-
-    Pass ``claim_token`` to claim the batch exclusively; omit it for the
-    single-worker case, where claiming would be pure overhead. Rate-limited
-    endpoints are skipped and their leases released.
-    """
-    stats = {"success": 0, "retrying": 0, "dlq": 0, "rate_limited": 0}
-    token = claim_token or uuid.uuid4().hex
+    """Run one worker pass with per-row lease renewal and fenced settlement."""
+    stats = {
+        "success": 0,
+        "retrying": 0,
+        "dlq": 0,
+        "rate_limited": 0,
+        "disabled": 0,
+        "stale": 0,
+    }
     exclusive = claim_token is not None
     lease_seconds = settings.claim_lease_seconds
-
     if exclusive:
-        release_expired_claims(session, lease_seconds)
-        batch = claim_due_deliveries(session, token, limit, lease_seconds)
+        batch = claim_due_deliveries(session, claim_token, limit, lease_seconds)
     else:
         batch = fetch_due_deliveries(session, limit)
 
     for delivery in batch:
         endpoint = session.get(Endpoint, delivery.endpoint_id)
         if endpoint is None:
-            delivery.status = STATUS_DLQ
-            delivery.last_error = "endpoint deleted"
-            _release_claim_if_needed(session, delivery, exclusive)
-            session.add(delivery)
-            session.commit()
+            if not _claimed_update(
+                session,
+                delivery.id,
+                claim_token,
+                {
+                    Delivery.status: STATUS_DLQ,
+                    Delivery.last_error: "endpoint deleted",
+                    Delivery.next_attempt_at: None,
+                    Delivery.claim_token: None,
+                    Delivery.claimed_at: None,
+                    Delivery.updated_at: utcnow(),
+                },
+            ):
+                stats["stale"] += 1
+                continue
             stats["dlq"] += 1
             continue
+        if not endpoint.enabled:
+            if not _claimed_update(
+                session,
+                delivery.id,
+                claim_token,
+                {
+                    Delivery.next_attempt_at: utcnow() + timedelta(seconds=60),
+                    Delivery.claim_token: None,
+                    Delivery.claimed_at: None,
+                    Delivery.updated_at: utcnow(),
+                },
+            ):
+                stats["stale"] += 1
+                continue
+            stats["disabled"] += 1
+            continue
         if not rate_limiter.allow(endpoint.id, endpoint.rate_limit_per_minute):
-            # Leave the row queued for the next pass, but free the lease: a full
-            # rate-limit window must not stall the delivery.
-            _release_claim_if_needed(session, delivery, exclusive)
-            if exclusive:
-                session.commit()
+            if not _claimed_update(
+                session,
+                delivery.id,
+                claim_token,
+                {Delivery.claim_token: None, Delivery.claimed_at: None},
+            ):
+                stats["stale"] += 1
+                continue
             stats["rate_limited"] += 1
             continue
+
         event_body = delivery.event.payload.encode() if delivery.event else b"{}"
-        _release_claim_if_needed(session, delivery, exclusive)
-        settled = settle_delivery(session, settings, delivery, endpoint, event_body, client)
+        if exclusive:
+            try:
+                renew_claim(session, delivery, claim_token, lease_seconds)
+            except ClaimLostError:
+                stats["stale"] += 1
+                continue
+        try:
+            settled = settle_delivery(
+                session,
+                settings,
+                delivery,
+                endpoint,
+                event_body,
+                client,
+                claim_token=claim_token,
+            )
+        except ClaimLostError:
+            stats["stale"] += 1
+            continue
         stats[settled.status if settled.status in stats else "retrying"] += 1
     return stats
 
@@ -247,11 +366,7 @@ def process_due_deliveries(
 def run_worker_forever(
     session_factory: Callable[[], Session], settings: Settings, poll_seconds: float = 2.0
 ) -> None:
-    """Long-running worker loop (used by ``python -m app.worker``).
-
-    Each batch is claimed under a fresh token, so several workers against one
-    database never hold the same delivery at once.
-    """
+    """Poll forever; Redis only shortens the wait and can never stop recovery."""
     rate_limiter = RateLimiter(settings.redis_url)
     queue = DeliveryQueue(settings.redis_url)
     while True:
@@ -263,12 +378,20 @@ def run_worker_forever(
                 rate_limiter,
                 claim_token=uuid.uuid4().hex,
             )
+        except Exception:
+            logger.exception("worker_pass_failed; retrying after poll interval")
+            session.rollback()
         finally:
             session.close()
-        # Redis only shortens the wait: drain any wake-ups, then sleep.
-        while queue.dequeue(timeout=0):
-            pass
-        time.sleep(poll_seconds)
+        # A positive BRPOP timeout is essential: Redis timeout=0 blocks forever,
+        # which previously prevented retries from ever becoming due.
+        try:
+            queue.dequeue(timeout=min(4, max(1, int(poll_seconds))))
+        except RedisError:
+            logger.warning("queue_unavailable; continuing database polling")
+            time.sleep(poll_seconds)
+        if not queue.has_redis:
+            time.sleep(poll_seconds)
 
 
 if __name__ == "__main__":  # pragma: no cover

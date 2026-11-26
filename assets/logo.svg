@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="460" height="128" viewBox="0 0 460 128" role="img" aria-labelledby="title description">
+  <title id="title">HookFlow</title>
+  <desc id="description">HookFlow wordmark with a flowing hook-shaped arrow in teal, blue, and violet.</desc>
+  <defs>
+    <linearGradient id="hookflow-logo-gradient" x1="24" y1="38" x2="96" y2="104" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2DD4BF"/>
+      <stop offset="0.52" stop-color="#38BDF8"/>
+      <stop offset="1" stop-color="#A78BFA"/>
+    </linearGradient>
+    <linearGradient id="hookflow-logo-tile" x1="18" y1="12" x2="112" y2="122" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#142033"/>
+      <stop offset="1" stop-color="#070D18"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(4 4)">
+    <rect x="0" y="0" width="120" height="120" rx="30" fill="url(#hookflow-logo-tile)"/>
+    <rect x="0.75" y="0.75" width="118.5" height="118.5" rx="29.25" fill="none" stroke="#334155" stroke-opacity="0.65" stroke-width="1.5"/>
+    <circle cx="22" cy="38" r="5.5" fill="#2DD4BF"/>
+    <path d="M22 38H54C74 38 90 50 90 67C90 83 77 94 60 94H36" fill="none" stroke="url(#hookflow-logo-gradient)" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M51 79L36 94L52 107" fill="none" stroke="url(#hookflow-logo-gradient)" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M22 57H48C61 57 71 65 71 76" fill="none" stroke="#38BDF8" stroke-opacity="0.22" stroke-width="4" stroke-linecap="round"/>
+  </g>
+  <text x="146" y="84" fill="#0F172A" font-family="DejaVu Sans, Arial, sans-serif" font-size="58" font-weight="700" letter-spacing="-2.4">Hook<tspan fill="#0D9488">Flow</tspan></text>
+</svg>

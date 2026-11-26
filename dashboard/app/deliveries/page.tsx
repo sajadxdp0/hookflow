@@ -1,8 +1,13 @@
-import { getDeliveries } from "@/lib/hookflow";
+import Link from "next/link";
+import type { Metadata } from "next";
 import { ReplayButton } from "@/components/ReplayButton";
-import { ErrorNote, Table, statusTone } from "@/components/ui";
+import { EmptyState, ErrorNote, PageHeader, StatusBadge, Table } from "@/components/ui";
+import { formatUtc, shortId } from "@/lib/format";
+import { getDeliveries } from "@/lib/hookflow";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Deliveries" };
 
 export default async function DeliveriesPage({
   searchParams,
@@ -11,82 +16,102 @@ export default async function DeliveriesPage({
 }) {
   const { status } = await searchParams;
   const filter = status ?? "";
+  const heading = (
+    <PageHeader
+      title="Deliveries"
+      description="Inspect delivery attempts and receiver responses. Only dead-lettered deliveries can be replayed; successful deliveries are never duplicated."
+      actions={
+        <Link href="/dlq" className="button-secondary">
+          Open dead letter queue
+        </Link>
+      }
+    />
+  );
+  const tabs = [
+    { key: "", label: "All" },
+    { key: "queued", label: "Queued" },
+    { key: "retrying", label: "Retrying" },
+    { key: "success", label: "Succeeded" },
+    { key: "dlq", label: "Dead letters" },
+  ];
 
   try {
     const { items } = await getDeliveries(filter || undefined);
-    const tabs = [
-      { key: "", label: "all" },
-      { key: "queued", label: "queued" },
-      { key: "retrying", label: "retrying" },
-      { key: "success", label: "success" },
-    ];
-
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="text-xl font-medium">Deliveries</h1>
-          <p className="mt-1 text-sm text-neutral-500">
-            Replay resets the attempt counter and re-queues the delivery.
-            Successful deliveries are refused, because replaying one would
-            duplicate a side effect at the receiver.
-          </p>
-        </div>
-
-        <div className="flex gap-2">
-          {tabs.map((t) => (
-            <a
-              key={t.key}
-              href={t.key ? `/deliveries?status=${t.key}` : "/deliveries"}
-              className={`rounded border px-3 py-1 font-mono text-xs transition-colors ${
-                filter === t.key
-                  ? "border-neutral-500 text-neutral-100"
-                  : "border-neutral-800 text-neutral-500 hover:text-neutral-300"
+        {heading}
+        <nav aria-label="Filter deliveries" className="flex flex-wrap gap-2">
+          {tabs.map((tab) => (
+            <Link
+              key={tab.key}
+              href={tab.key ? `/deliveries?status=${tab.key}` : "/deliveries"}
+              aria-current={filter === tab.key ? "page" : undefined}
+              className={`rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors ${
+                filter === tab.key
+                  ? "border-teal-400/30 bg-teal-400/10 text-teal-200"
+                  : "border-white/10 text-slate-400 hover:border-white/20 hover:text-slate-100"
               }`}
             >
-              {t.label}
-            </a>
+              {tab.label}
+            </Link>
           ))}
-        </div>
+        </nav>
 
-        <Table
-          head={["id", "status", "attempts", "next attempt", "code", "latency", "error", ""]}
-        >
-          {items.map((d) => (
-            <tr key={d.id}>
-              <td className="px-4 py-2 font-mono text-xs">{d.id.slice(0, 12)}</td>
-              <td className={`px-4 py-2 font-mono text-xs ${statusTone(d.status)}`}>
-                {d.status}
-              </td>
-              <td className="px-4 py-2 font-mono text-xs">{d.attempts}</td>
-              <td className="px-4 py-2 font-mono text-xs text-neutral-500">
-                {d.next_attempt_at
-                  ? new Date(d.next_attempt_at).toISOString().slice(5, 19).replace("T", " ")
-                  : "—"}
-              </td>
-              <td className="px-4 py-2 font-mono text-xs">
-                {d.last_status_code ?? "—"}
-              </td>
-              <td className="px-4 py-2 font-mono text-xs">
-                {d.latency_ms == null ? "—" : `${d.latency_ms}ms`}
-              </td>
-              <td className="max-w-xs truncate px-4 py-2 font-mono text-xs text-neutral-500">
-                {d.last_error ?? "—"}
-              </td>
-              <td className="px-4 py-2">
-                <ReplayButton
-                  deliveryId={d.id}
-                  disabled={d.status === "success"}
-                />
-              </td>
-            </tr>
-          ))}
-        </Table>
-        {items.length === 0 ? (
-          <p className="text-sm text-neutral-500">No deliveries match this filter.</p>
-        ) : null}
+        {items.length > 0 ? (
+          <Table
+            head={["ID", "Status", "Attempts", "Next attempt (UTC)", "Code", "Latency", "Last error", "Action"]}
+          >
+            {items.map((delivery) => (
+              <tr key={delivery.id}>
+                <td className="px-4 py-3 font-mono text-xs" title={delivery.id}>
+                  {shortId(delivery.id)}
+                </td>
+                <td className="px-4 py-3">
+                  <StatusBadge status={delivery.status} />
+                </td>
+                <td className="px-4 py-3 font-mono text-xs text-slate-300">
+                  {delivery.attempts}
+                </td>
+                <td className="px-4 py-3 font-mono text-xs text-slate-400">
+                  {formatUtc(delivery.next_attempt_at)}
+                </td>
+                <td className="px-4 py-3 font-mono text-xs text-slate-300">
+                  {delivery.last_status_code ?? "—"}
+                </td>
+                <td className="px-4 py-3 font-mono text-xs text-slate-300">
+                  {delivery.latency_ms == null ? "—" : `${delivery.latency_ms}ms`}
+                </td>
+                <td
+                  className="max-w-xs truncate px-4 py-3 font-mono text-xs text-slate-500"
+                  title={delivery.last_error ?? undefined}
+                >
+                  {delivery.last_error ?? "—"}
+                </td>
+                <td className="px-4 py-3">
+                  <ReplayButton deliveryId={delivery.id} status={delivery.status} />
+                </td>
+              </tr>
+            ))}
+          </Table>
+        ) : (
+          <EmptyState
+            title="No deliveries match this filter"
+            description="Try another status, or send an event to a registered endpoint."
+            action={
+              <Link href="/deliveries" className="button-secondary">
+                Clear filter
+              </Link>
+            }
+          />
+        )}
       </div>
     );
   } catch (error) {
-    return <ErrorNote error={error} />;
+    return (
+      <div className="space-y-6">
+        {heading}
+        <ErrorNote error={error} />
+      </div>
+    );
   }
 }

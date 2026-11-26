@@ -20,8 +20,6 @@ def _fail_client(status=500):
 
 def test_requeue_dlq_resets_to_queued(client):
     from app import main as main_module
-    from app.worker import process_due_deliveries
-    from app.ratelimit import RateLimiter
 
     ep = _register(client)
     r = client.post(

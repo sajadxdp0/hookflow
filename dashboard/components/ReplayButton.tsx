@@ -5,32 +5,43 @@ import { replayDelivery } from "@/app/actions";
 
 export function ReplayButton({
   deliveryId,
-  disabled,
+  status,
 }: {
   deliveryId: string;
-  disabled?: boolean;
+  status: string;
 }) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const replayable = status === "dlq";
 
   return (
-    <span className="inline-flex items-center gap-2">
+    <div className="flex flex-col items-start gap-1">
       <button
-        disabled={disabled || pending}
+        type="button"
+        disabled={!replayable || pending}
         onClick={() =>
           startTransition(async () => {
             setError(null);
             const result = await replayDelivery(deliveryId);
-            if (!result.ok) setError(result.error ?? "replay failed");
+            if (!result.ok) {
+              setError(result.error ?? "Replay failed.");
+            }
           })
         }
-        className="rounded border border-neutral-700 px-2 py-1 font-mono text-xs text-neutral-300 transition-colors hover:border-neutral-500 hover:text-neutral-100 disabled:cursor-not-allowed disabled:opacity-40"
+        title={
+          replayable
+            ? "Return this delivery to the queue"
+            : "Only dead-lettered deliveries can be replayed"
+        }
+        className="button-secondary"
       >
-        {pending ? "replaying…" : "replay"}
+        {pending ? "Replaying…" : "Replay"}
       </button>
       {error ? (
-        <span className="font-mono text-xs text-rose-400">{error}</span>
+        <span role="alert" className="max-w-xs text-xs leading-5 text-rose-300">
+          {error}
+        </span>
       ) : null}
-    </span>
+    </div>
   );
 }

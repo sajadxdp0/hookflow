@@ -111,7 +111,9 @@ def test_redis_limiter_is_scoped_to_the_current_minute_window():
     try:
         assert limiter.allow(key, 1) is True
         assert limiter.allow(key, 1) is False
-        assert limiter._redis.exists(redis_key) == 1, "counter must be stored under the windowed key"
+        assert limiter._redis.exists(redis_key) == 1, (
+            "counter must be stored under the windowed key"
+        )
     finally:
         limiter._redis.delete(redis_key)
 

@@ -1,87 +1,84 @@
 # HookFlow performance
 
-All numbers below were **measured on this machine**, not estimated. Reproduce
-with:
+## Historical measurements
+
+The numbers below were measured on 2026-09-27, before HookFlow 0.2.0. They are preserved as historical ingest data, not as a current benchmark, capacity commitment, or SLO. The 0.2.0 ingest quota, endpoint lifecycle, and destination validation paths have not been measured here.
+
+The original environment used a single machine, a 1 KB payload, and one sequential client. Results came from two PostgreSQL runs and two PostgreSQL-plus-Redis runs.
+
+## Historical method
+
+`scripts/load_test.py` drives the ASGI application in-process with `fastapi.testclient`. It measures application logic and database cost, but excludes:
+
+- HTTP server, socket, and TLS overhead.
+- Concurrent clients and lock contention.
+- Worker outbound delivery.
+- Multi-replica behavior.
+- The ingest quota and endpoint lifecycle controls added in 0.2.0.
+
+The RPS column therefore means completed sequential requests per second for one waiting client, not maximum throughput.
+
+To rerun the load script against the current code, use uv and the same database topology:
 
 ```bash
 docker compose -f docker/docker-compose.yml up -d postgres redis
 
 # SQLite
-python scripts/load_test.py --events 500
+uv run python scripts/load_test.py --events 500
 
 # PostgreSQL
-python scripts/load_test.py --events 2000 \
+uv run python scripts/load_test.py --events 2000 \
   --database-url postgresql+psycopg://hookflow:hookflow@localhost:5432/hookflow
 
-# PostgreSQL + Redis enqueue
-python scripts/load_test.py --events 2000 \
+# PostgreSQL + Redis wake-up
+uv run python scripts/load_test.py --events 2000 \
   --database-url postgresql+psycopg://hookflow:hookflow@localhost:5432/hookflow \
   --redis-url redis://localhost:6379/0
 ```
 
-Measured 2026-09-27, after the Alembic and secret-encryption changes.
+Any new result should record date, commit, hardware, database configuration, payload size, concurrency, and whether the worker was running.
 
-## Method, and what it excludes
+## Historical results
 
-`scripts/load_test.py` drives the ASGI app in-process through
-`fastapi.testclient`. It therefore measures **application logic + database
-cost** and nothing else. Specifically it does *not* include:
-
-- HTTP server or socket overhead (no uvicorn, no network)
-- concurrency (single-threaded sequential requests, so no lock contention)
-- the delivery worker's outbound HTTP
-- multi-replica behaviour
-
-Because requests are sequential, the figures describe per-request latency on
-an idle system, **not** throughput under load. Treat the RPS column as
-"requests per second of one client waiting for each response", not as a
-capacity number.
-
-## Results
-
-1KB payload, sequential single client:
+1 KB payload, sequential single client:
 
 | Engine | Events | RPS | p50 | p95 | p99 | mean |
-|---|---|---|---|---|---|---|
+|---|---:|---:|---:|---:|---:|---:|
 | SQLite (file) | 500 | 112.3 | 7.5ms | 18.9ms | 24.5ms | 8.9ms |
 | PostgreSQL 15 | 2000 | 52.1 | 18.5ms | 34.0ms | 40.0ms | 19.2ms |
 | PostgreSQL 15 | 2000 | 53.9 | 17.1ms | 34.1ms | 41.6ms | 18.6ms |
 | PostgreSQL + Redis | 1500 | 48.3 | 19.9ms | 34.8ms | 42.7ms | 20.7ms |
 | PostgreSQL + Redis | 1500 | 55.3 | 16.5ms | 35.3ms | 40.8ms | 18.1ms |
 
-## What the numbers actually say
+## Interpretation
 
-**PostgreSQL is roughly 2x slower per request than SQLite here, and the cause is
-the commit, not the query.** Ingest performs one durable transaction per event
-(Event row + Delivery row). On PostgreSQL with default `synchronous_commit=on`,
-that is one `fsync` per request, which is where the ~15ms goes. SQLite is
-faster only because it is a local file with a much cheaper commit path — that
-is an artefact of the test setup, not a claim that SQLite is the better
-production database.
+In that historical setup, PostgreSQL committed roughly twice as slowly as local-file SQLite. Ingest performs one durable transaction per event, and PostgreSQL's default synchronous commit made the commit, rather than the query, the dominant cost. This does not make SQLite an appropriate production database.
 
-**Enabling Redis costs almost nothing.** 48–55 rps with Redis versus 52–54
-without: the `LPUSH` happens *after* the commit and is dwarfed by the `fsync`.
-This is the persist-first design paying off — Redis is a wake-up hint, and the
-database remains the source of truth, so its absence degrades latency rather
-than correctness.
+Redis wake-ups added little relative to the durable commit: the historical PostgreSQL runs were approximately 48–55 RPS with Redis and 52–54 RPS without. The architectural conclusion remains that Redis is an optimization; PostgreSQL polling is the recovery path.
 
-**The real bottleneck is durable commit latency, and the fix is batching.**
-Options, in increasing order of effort:
-
-1. `synchronous_commit = off` — trades durability on crash for throughput.
-   Acceptable only if losing the last few events is tolerable.
-2. Group commit — batch N accepted events into one transaction. Preserves
-   durability per batch, and is the correct answer for a webhook receiver.
-3. Asynchronous acceptance — return `202` after an in-memory enqueue and let a
-   writer persist. Changes the delivery guarantee and needs care: it must be
-   paired with the DLQ so nothing is silently lost.
+The main throughput lever is durable commit latency. Possible future work includes group commit or asynchronous batching. Disabling synchronous commit would trade crash durability for latency and is not compatible with HookFlow's persist-first promise unless that promise is explicitly changed. Returning before persistence would also change the acceptance guarantee. Neither is a default recommendation.
 
 ## Not yet measured
 
-Do not cite numbers for any of these until they are actually run:
+Do not cite performance numbers for the following until they are measured on the current release:
 
-- Concurrent ingest (N parallel clients) — the sequential numbers above say
-  nothing about behaviour under contention, which is the interesting case.
-- Worker delivery throughput against a stub receiver (success/5xx/timeout mix).
-- End-to-end p95: ingest → signed POST → receiver acknowledgement.
-- p99/p999 under sustained load. Two runs is not a distribution.
+- Concurrent ingest under contention.
+- Worker throughput against a stub receiver with a success, `5xx`, and timeout mix.
+- End-to-end latency from ingest through receiver acknowledgement.
+- Sustained p99/p999 behavior.
+- PostgreSQL high-availability failover and connection-pool limits.
+- Cost and latency of DNS resolution and public-IP validation in the worker.
+- Replica-safe quota behavior under Redis failover.
+
+## Measuring a deployment
+
+Track these independently:
+
+1. Ingest acceptance latency and `429` rate per tenant.
+2. PostgreSQL commit latency, connections, and lock waits.
+3. Queue depth and oldest queued/retrying age.
+4. Delivery attempt latency, success rate, retry rate, and DLQ growth.
+5. DNS/IP validation failures and blocked destinations.
+6. Redis command errors, wake-up lag, and limiter latency.
+
+Use the [deployment guide](deployment.md) alerting checklist and the historical method above when comparing releases.

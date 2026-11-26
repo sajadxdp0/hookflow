@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 
 import httpx
+import pytest
 
 from app.config import Settings
 from app.db import Delivery, Endpoint, Event, make_engine, make_session_factory
@@ -20,6 +21,13 @@ def _session():
     engine = make_engine(url)
     upgrade_to_head(url)
     return make_session_factory(engine)()
+
+
+@pytest.fixture()
+def worker_session():
+    session = _session()
+    yield session
+    session.close()
 
 
 def _seed(session, url="https://example.com/wh"):
@@ -56,8 +64,8 @@ def _fail_client(status=500):
     return httpx.Client(transport=httpx.MockTransport(handler))
 
 
-def test_success_marks_delivered():
-    session = _session()
+def test_success_marks_delivered(worker_session):
+    session = worker_session
     _, _, d = _seed(session)
     settings = Settings(database_url="sqlite://", redis_url="")
     stats = process_due_deliveries(session, settings, RateLimiter(), _ok_client())
@@ -65,8 +73,8 @@ def test_success_marks_delivered():
     assert session.get(Delivery, d.id).status == "success"
 
 
-def test_failures_retry_then_dlq():
-    session = _session()
+def test_failures_retry_then_dlq(worker_session):
+    session = worker_session
     _, _, d = _seed(session)
     settings = Settings(database_url="sqlite://", redis_url="", max_attempts=2)
     stats = process_due_deliveries(session, settings, RateLimiter(), _fail_client())
@@ -82,8 +90,8 @@ def test_failures_retry_then_dlq():
     assert session.get(Delivery, d.id).status == "dlq"
 
 
-def test_rate_limited_skipped():
-    session = _session()
+def test_rate_limited_skipped(worker_session):
+    session = worker_session
     _, _, d = _seed(session)
     settings = Settings(database_url="sqlite://", redis_url="")
     limiter = RateLimiter()

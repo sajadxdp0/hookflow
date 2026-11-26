@@ -25,9 +25,8 @@ Create Date: 2026-09-27 16:19:03.243368
 """
 from __future__ import annotations
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision = '68f2ffddab42'
 down_revision = None
@@ -55,7 +54,9 @@ def upgrade() -> None:
     sa.UniqueConstraint('endpoint_id', 'idempotency_key', name='uq_events_endpoint_key')
     )
     with op.batch_alter_table('events', schema=None) as batch_op:
-        batch_op.create_index('ix_events_endpoint_created', ['endpoint_id', 'created_at'], unique=False)
+        batch_op.create_index(
+            'ix_events_endpoint_created', ['endpoint_id', 'created_at'], unique=False
+        )
 
     op.create_table('deliveries',
     sa.Column('id', sa.String(length=32), nullable=False),
@@ -74,9 +75,13 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id')
     )
     with op.batch_alter_table('deliveries', schema=None) as batch_op:
-        batch_op.create_index('ix_deliveries_endpoint_created', ['endpoint_id', 'created_at'], unique=False)
+        batch_op.create_index(
+            'ix_deliveries_endpoint_created', ['endpoint_id', 'created_at'], unique=False
+        )
         batch_op.create_index('ix_deliveries_event', ['event_id'], unique=False)
-        batch_op.create_index('ix_deliveries_status_next', ['status', 'next_attempt_at'], unique=False)
+        batch_op.create_index(
+            'ix_deliveries_status_next', ['status', 'next_attempt_at'], unique=False
+        )
 
 
 def downgrade() -> None:

@@ -12,7 +12,6 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
-from sqlalchemy import text
 
 from app.config import Settings
 from app.db import (
@@ -46,7 +45,6 @@ def claimed_db():
         upgrade_to_head(url)
         factory = make_session_factory(engine)
         session = factory()
-        from tests.test_correctness import _set_fk_enforcement
 
         from tests.conftest import _truncate
 

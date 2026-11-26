@@ -7,36 +7,40 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  schema:
-    # Models and migrations must not drift. A model change shipped without a
-    # matching migration passes every functional test and then fails in
-    # production, so this is a separate, fast gate.
+  python:
+    name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
-          python-version: "3.11"
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-      - name: Migrations apply cleanly from empty
-        run: |
-          DATABASE_URL=sqlite:///./ci.db alembic upgrade head
-      - name: No model/migration drift
-        run: |
-          DATABASE_URL=sqlite:///./ci.db alembic check
-      - name: Migrations reverse cleanly
-        run: |
-          DATABASE_URL=sqlite:///./ci.db alembic downgrade base
-          DATABASE_URL=sqlite:///./ci.db alembic upgrade head
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: "0.13.10"
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --frozen --extra dev
+      - name: Lint
+        run: uv run --frozen ruff check .
+      - name: Test with coverage
+        run: uv run --frozen pytest
 
   postgres:
-    # The suite normally runs on SQLite. Run it against the production engines
-    # too: dialect differences (VARCHAR length enforcement, constraint
-    # enforcement, locking, DateTime handling) are exactly what SQLite hides.
-    # The first PostgreSQL run caught a real defect — an encrypted secret
-    # exceeding VARCHAR(128) that SQLite accepted without complaint.
+    name: PostgreSQL and Redis integration
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -59,60 +63,96 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 5
+    env:
+      DATABASE_URL: postgresql+psycopg://hookflow:hookflow@localhost:5432/hookflow
+      HOOKFLOW_TEST_DATABASE_URL: postgresql+psycopg://hookflow:hookflow@localhost:5432/hookflow
+      REDIS_URL: redis://localhost:6379/0
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
-          python-version: "3.11"
-      - name: Install dependencies
-        run: pip install -r requirements.txt -r requirements-dev.txt
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: "0.13.10"
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --frozen --extra dev
       - name: Migrate
-        env:
-          DATABASE_URL: postgresql+psycopg://hookflow:hookflow@localhost:5432/hookflow
-        run: alembic upgrade head
-      - name: Tests on PostgreSQL + Redis
-        env:
-          HOOKFLOW_TEST_DATABASE_URL: postgresql+psycopg://hookflow:hookflow@localhost:5432/hookflow
-          REDIS_URL: redis://localhost:6379/0
-        run: python -m pytest -q --cov=app --cov-report=term-missing --cov-fail-under=85
+        run: uv run --frozen alembic upgrade head
+      - name: Test on PostgreSQL and Redis
+        run: uv run --frozen pytest
 
-  tests:
+  migrations:
+    name: Migration drift and reverse checks
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: sqlite:////tmp/hookflow-migrations.db
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
-          python-version: "3.11"
-      - name: Install dependencies
-        run: pip install -r requirements.txt -r requirements-dev.txt
-      - name: Run tests
-        run: python -m pytest
-      - name: Enforce coverage floor
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: "0.13.10"
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --frozen --extra dev
+      - name: Migrations apply cleanly from empty
         run: |
-          python -m coverage report --fail-under=85
+          rm -f /tmp/hookflow-migrations.db
+          uv run --frozen alembic upgrade head
+      - name: No model or migration drift
+        run: uv run --frozen alembic check
+      - name: Migrations reverse and reapply cleanly
+        run: |
+          uv run --frozen alembic downgrade base
+          uv run --frozen alembic upgrade head
 
-  docker-build:
+  docker:
+    name: Docker images
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Docker build check
-        run: docker build -f docker/Dockerfile -t hookflow:ci .
+      - uses: actions/checkout@v7
+      - name: Build API and worker image
+        run: docker build --file docker/Dockerfile --tag hookflow:ci .
+      - name: Build dashboard image
+        run: docker build --file dashboard/Dockerfile --tag hookflow-dashboard:ci .
 
   dashboard:
-    # Type-checks and builds the operator UI. No API is needed at build time:
-    # every page is server-rendered on demand and reads the API key from the
-    # server environment, so nothing operational is baked into the bundle.
+    name: Dashboard typecheck, build, and audit
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: dashboard
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
           cache-dependency-path: dashboard/package-lock.json
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
+      - run: npm audit --audit-level=high
+
+  python-audit:
+    name: Python dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: "0.13.10"
+          enable-cache: true
+      - name: Export locked dependencies
+        run: uv export --frozen --all-extras --no-emit-project --output-file /tmp/hookflow-locked-requirements.txt
+      - name: Audit locked project dependencies
+        run: uvx --from pip-audit==2.10.1 pip-audit --require-hashes --strict -r /tmp/hookflow-locked-requirements.txt

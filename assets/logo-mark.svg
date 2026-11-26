@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title description">
+  <title id="title">HookFlow mark</title>
+  <desc id="description">A flowing hook-shaped arrow in teal, blue, and violet on a dark rounded tile.</desc>
+  <defs>
+    <linearGradient id="hookflow-mark-gradient" x1="24" y1="38" x2="96" y2="104" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2DD4BF"/>
+      <stop offset="0.52" stop-color="#38BDF8"/>
+      <stop offset="1" stop-color="#A78BFA"/>
+    </linearGradient>
+    <linearGradient id="hookflow-mark-tile" x1="18" y1="12" x2="112" y2="122" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#142033"/>
+      <stop offset="1" stop-color="#070D18"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="30" fill="url(#hookflow-mark-tile)"/>
+  <rect x="4.75" y="4.75" width="118.5" height="118.5" rx="29.25" fill="none" stroke="#334155" stroke-opacity="0.65" stroke-width="1.5"/>
+  <circle cx="26" cy="42" r="5.5" fill="#2DD4BF"/>
+  <path d="M26 42H58C78 42 94 54 94 71C94 87 81 98 64 98H40" fill="none" stroke="url(#hookflow-mark-gradient)" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M55 83L40 98L56 111" fill="none" stroke="url(#hookflow-mark-gradient)" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M26 61H52C65 61 75 69 75 80" fill="none" stroke="#38BDF8" stroke-opacity="0.22" stroke-width="4" stroke-linecap="round"/>
+</svg>

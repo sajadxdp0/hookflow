@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title description">
+  <title id="title">HookFlow — durable webhook delivery</title>
+  <desc id="description">HookFlow social card with an original flowing hook arrow, product tagline, and delivery stages.</desc>
+  <defs>
+    <linearGradient id="card-flow" x1="90" y1="90" x2="940" y2="420" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2DD4BF"/>
+      <stop offset="0.5" stop-color="#38BDF8"/>
+      <stop offset="1" stop-color="#A78BFA"/>
+    </linearGradient>
+    <linearGradient id="card-tile" x1="86" y1="68" x2="282" y2="264" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#17243A"/>
+      <stop offset="1" stop-color="#0B1220"/>
+    </linearGradient>
+    <radialGradient id="card-glow-teal" cx="0" cy="0" r="1" gradientTransform="translate(1020 120) rotate(128) scale(530 480)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0D9488" stop-opacity="0.3"/>
+      <stop offset="1" stop-color="#0D9488" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="card-glow-violet" cx="0" cy="0" r="1" gradientTransform="translate(300 620) rotate(-35) scale(520 440)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7C3AED" stop-opacity="0.26"/>
+      <stop offset="1" stop-color="#7C3AED" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="card-grid" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M48 0H0V48" fill="none" stroke="#94A3B8" stroke-opacity="0.06" stroke-width="1"/>
+    </pattern>
+  </defs>
+  <rect width="1280" height="640" fill="#070D18"/>
+  <rect width="1280" height="640" fill="url(#card-grid)"/>
+  <rect width="1280" height="640" fill="url(#card-glow-teal)"/>
+  <rect width="1280" height="640" fill="url(#card-glow-violet)"/>
+  <g transform="translate(92 76) scale(1.5)">
+    <rect x="0" y="0" width="120" height="120" rx="30" fill="url(#card-tile)"/>
+    <rect x="0.75" y="0.75" width="118.5" height="118.5" rx="29.25" fill="none" stroke="#475569" stroke-opacity="0.55" stroke-width="1.5"/>
+    <circle cx="22" cy="38" r="5.5" fill="#2DD4BF"/>
+    <path d="M22 38H54C74 38 90 50 90 67C90 83 77 94 60 94H36" fill="none" stroke="url(#card-flow)" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M51 79L36 94L52 107" fill="none" stroke="url(#card-flow)" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M22 57H48C61 57 71 65 71 76" fill="none" stroke="#38BDF8" stroke-opacity="0.24" stroke-width="4" stroke-linecap="round"/>
+  </g>
+  <text x="316" y="174" fill="#F8FAFC" font-family="DejaVu Sans, Arial, sans-serif" font-size="78" font-weight="700" letter-spacing="-3">Hook<tspan fill="#2DD4BF">Flow</tspan></text>
+  <text x="320" y="231" fill="#CBD5E1" font-family="DejaVu Sans, Arial, sans-serif" font-size="29">Durable webhook delivery, without inline coupling.</text>
+  <g font-family="DejaVu Sans, Arial, sans-serif" font-size="17" font-weight="600">
+    <rect x="320" y="274" width="155" height="40" rx="20" fill="#0F172A" stroke="#1E293B"/>
+    <text x="397.5" y="299" fill="#5EEAD4" text-anchor="middle">Persist first</text>
+    <rect x="489" y="274" width="124" height="40" rx="20" fill="#0F172A" stroke="#1E293B"/>
+    <text x="551" y="299" fill="#7DD3FC" text-anchor="middle">HMAC signed</text>
+    <rect x="627" y="274" width="126" height="40" rx="20" fill="#0F172A" stroke="#1E293B"/>
+    <text x="690" y="299" fill="#C4B5FD" text-anchor="middle">Retry safely</text>
+    <rect x="767" y="274" width="116" height="40" rx="20" fill="#0F172A" stroke="#1E293B"/>
+    <text x="825" y="299" fill="#F8FAFC" text-anchor="middle">Replay DLQ</text>
+  </g>
+  <path d="M98 461H1164" stroke="#1E293B" stroke-width="2"/>
+  <path d="M98 461H1164" stroke="url(#card-flow)" stroke-width="3" stroke-linecap="round"/>
+  <g font-family="DejaVu Sans, Arial, sans-serif" font-size="17">
+    <circle cx="146" cy="461" r="7" fill="#2DD4BF"/>
+    <text x="146" y="500" fill="#94A3B8" text-anchor="middle">Event committed</text>
+    <circle cx="452" cy="461" r="7" fill="#38BDF8"/>
+    <text x="452" y="500" fill="#94A3B8" text-anchor="middle">Worker claims</text>
+    <circle cx="758" cy="461" r="7" fill="#818CF8"/>
+    <text x="758" y="500" fill="#94A3B8" text-anchor="middle">Receiver verifies</text>
+    <circle cx="1110" cy="461" r="7" fill="#A78BFA"/>
+    <text x="1110" y="500" fill="#94A3B8" text-anchor="middle">History + replay</text>
+  </g>
+  <text x="98" y="591" fill="#64748B" font-family="DejaVu Sans, Arial, sans-serif" font-size="16">Self-hosted · Python · PostgreSQL · Redis</text>
+  <text x="1182" y="591" fill="#94A3B8" font-family="DejaVu Sans, Arial, sans-serif" font-size="16" text-anchor="end">github.com/sajadxdp0/hookflow</text>
+</svg>

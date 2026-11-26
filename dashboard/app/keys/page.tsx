@@ -1,75 +1,99 @@
+import type { Metadata } from "next";
+import { RevokeKeyButton } from "@/components/RevokeKeyButton";
+import { EmptyState, ErrorNote, PageHeader, StatusBadge, Table } from "@/components/ui";
+import { formatUtc } from "@/lib/format";
 import { getApiKeys } from "@/lib/hookflow";
-import { ErrorNote, Table } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
+export const metadata: Metadata = { title: "API keys" };
+
 export default async function KeysPage() {
+  const heading = (
+    <PageHeader
+      title="API keys"
+      description="Review tenant credentials and revoke compromised keys. Plaintext keys are shown only when created and cannot be recovered."
+    />
+  );
   const tenantId = process.env.HOOKFLOW_TENANT_ID;
 
-  if (!tenantId) {
+  if (!tenantId || !process.env.HOOKFLOW_ADMIN_TOKEN) {
     return (
-      <div className="space-y-3">
-        <h1 className="text-xl font-medium">API keys</h1>
-        <p className="text-sm text-neutral-500">
-          Set <code className="font-mono text-neutral-300">HOOKFLOW_TENANT_ID</code>{" "}
-          and <code className="font-mono text-neutral-300">HOOKFLOW_ADMIN_TOKEN</code>{" "}
-          in <code className="font-mono text-neutral-300">dashboard/.env.local</code>{" "}
-          to list this tenant&apos;s keys.
-        </p>
+      <div className="space-y-6">
+        {heading}
+        <EmptyState
+          title="Admin access is not configured"
+          description="Set HOOKFLOW_TENANT_ID and HOOKFLOW_ADMIN_TOKEN in dashboard/.env.local, then restart the dashboard to list and revoke this tenant's keys."
+        />
       </div>
     );
   }
 
   try {
     const keys = await getApiKeys(tenantId);
-    if (!keys) {
-      return (
-        <p className="text-sm text-neutral-500">
-          Admin access is not configured, so keys cannot be listed. The API
-          refuses admin routes with 503 when no admin token is set.
-        </p>
-      );
-    }
-
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="text-xl font-medium">API keys</h1>
-          <p className="mt-1 text-sm text-neutral-500">
-            Only a SHA-256 digest is stored. The plaintext key is shown once, at
-            creation, and cannot be recovered.
-          </p>
-        </div>
-        <Table head={["prefix", "label", "created", "last used", "state"]}>
-          {keys.map((k) => (
-            <tr key={k.id}>
-              <td className="px-4 py-2 font-mono text-xs">
-                hf_{k.key_prefix}_…
-              </td>
-              <td className="px-4 py-2 text-xs text-neutral-300">
-                {k.label || "—"}
-              </td>
-              <td className="px-4 py-2 font-mono text-xs text-neutral-500">
-                {new Date(k.created_at).toISOString().slice(0, 10)}
-              </td>
-              <td className="px-4 py-2 font-mono text-xs text-neutral-500">
-                {k.last_used_at
-                  ? new Date(k.last_used_at).toISOString().slice(0, 19).replace("T", " ")
-                  : "never"}
-              </td>
-              <td
-                className={`px-4 py-2 font-mono text-xs ${
-                  k.revoked_at ? "text-rose-400" : "text-emerald-400"
-                }`}
-              >
-                {k.revoked_at ? "revoked" : "active"}
-              </td>
-            </tr>
-          ))}
-        </Table>
+        {heading}
+        {keys.length === 0 ? (
+          <EmptyState
+            title="No API keys found"
+            description="Provision a key through the admin API. Its plaintext value will be returned once at creation."
+          />
+        ) : (
+          <Table head={["Prefix", "Label", "Created", "Last used", "State", "Action"]}>
+            {keys.map((key) => {
+              const dashboardCredential = process.env.HOOKFLOW_API_KEY?.startsWith(
+                `hf_${key.key_prefix}_`,
+              );
+              return (
+                <tr key={key.id}>
+                  <td className="px-4 py-3 font-mono text-xs text-slate-200">
+                    hf_{key.key_prefix}_…
+                    {dashboardCredential && !key.revoked_at ? (
+                      <span className="ml-2 rounded border border-sky-400/20 bg-sky-400/10 px-1.5 py-0.5 text-[10px] text-sky-300">
+                        dashboard
+                      </span>
+                    ) : null}
+                  </td>
+                  <td className="px-4 py-3 text-xs text-slate-300">{key.label || "—"}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-slate-500">
+                    {formatUtc(key.created_at, false)}
+                  </td>
+                  <td className="px-4 py-3 font-mono text-xs text-slate-500">
+                    {key.last_used_at ? `${formatUtc(key.last_used_at)} UTC` : "never"}
+                  </td>
+                  <td className="px-4 py-3">
+                    <StatusBadge status={key.revoked_at ? "revoked" : "active"} />
+                  </td>
+                  <td className="px-4 py-3">
+                    {key.revoked_at ? (
+                      <span className="text-xs text-slate-600">—</span>
+                    ) : (
+                      <RevokeKeyButton
+                        keyId={key.id}
+                        prefix={key.key_prefix}
+                        tenantId={key.tenant_id}
+                        dashboardCredential={Boolean(dashboardCredential)}
+                      />
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </Table>
+        )}
+        <p className="text-xs leading-5 text-slate-500">
+          Revocation is immediate. If you revoke the key marked &ldquo;dashboard&rdquo;,
+          this console will lose API access until its server-side key is replaced.
+        </p>
       </div>
     );
   } catch (error) {
-    return <ErrorNote error={error} />;
+    return (
+      <div className="space-y-6">
+        {heading}
+        <ErrorNote error={error} />
+      </div>
+    );
   }
 }

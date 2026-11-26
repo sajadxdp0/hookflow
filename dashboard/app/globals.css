@@ -1,26 +1,183 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: dark;
+  --background: #080b12;
+  --foreground: #e2e8f0;
+  --accent: #5eead4;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  background: var(--background);
+  scrollbar-color: #334155 #0b101a;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  min-height: 100svh;
+  margin: 0;
+  background:
+    radial-gradient(circle at 12% -10%, rgb(45 212 191 / 7%), transparent 34rem),
+    radial-gradient(circle at 100% 0%, rgb(56 189 248 / 5%), transparent 28rem),
+    var(--background);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: rgb(94 234 212 / 25%);
+  color: #f0fdfa;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+button,
+a,
+input,
+summary {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:not(:disabled),
+summary {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.panel {
+  border: 1px solid rgb(255 255 255 / 9%);
+  border-radius: 0.75rem;
+  background: linear-gradient(145deg, rgb(19 27 41 / 82%), rgb(12 17 27 / 88%));
+  box-shadow: 0 12px 35px rgb(0 0 0 / 12%);
+}
+
+.field-label {
+  display: block;
+  margin-bottom: 0.45rem;
+  color: #cbd5e1;
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.field {
+  width: 100%;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 0.5rem;
+  background: rgb(2 6 12 / 55%);
+  padding: 0.625rem 0.75rem;
+  color: #f1f5f9;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.field::placeholder {
+  color: #64748b;
+}
+
+.field:hover:not(:focus) {
+  border-color: rgb(255 255 255 / 20%);
+}
+
+.field:focus {
+  border-color: rgb(94 234 212 / 65%);
+  outline: none;
+  box-shadow: 0 0 0 3px rgb(94 234 212 / 12%);
+}
+
+.button-primary,
+.button-secondary,
+.button-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.85rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.25rem;
+  white-space: nowrap;
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+.button-primary {
+  border: 1px solid #5eead4;
+  background: #5eead4;
+  color: #042f2e;
+}
+
+.button-primary:hover:not(:disabled) {
+  border-color: #99f6e4;
+  background: #99f6e4;
+}
+
+.button-secondary {
+  border: 1px solid rgb(255 255 255 / 12%);
+  background: rgb(255 255 255 / 3%);
+  color: #cbd5e1;
+}
+
+.button-secondary:hover:not(:disabled) {
+  border-color: rgb(255 255 255 / 22%);
+  background: rgb(255 255 255 / 6%);
+  color: #f8fafc;
+}
+
+.button-danger {
+  border: 1px solid rgb(251 113 133 / 25%);
+  background: rgb(251 113 133 / 7%);
+  color: #fda4af;
+}
+
+.button-danger:hover:not(:disabled) {
+  border-color: rgb(251 113 133 / 45%);
+  background: rgb(251 113 133 / 12%);
+  color: #fecdd3;
+}
+
+.skip-link {
+  position: fixed;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 100;
+  transform: translateY(-200%);
+  border-radius: 0.5rem;
+  background: #5eead4;
+  padding: 0.6rem 1rem;
+  color: #042f2e;
+  font-weight: 600;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }

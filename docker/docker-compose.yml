@@ -1,22 +1,36 @@
+x-hookflow-build: &hookflow-build
+  context: ..
+  dockerfile: docker/Dockerfile
+
+x-hookflow-environment: &hookflow-environment
+  DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://hookflow:hookflow@postgres:5432/hookflow}
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+  HOOKFLOW_ENVIRONMENT: ${HOOKFLOW_ENVIRONMENT:-development}
+  SECRET_ENCRYPTION_KEY: ${SECRET_ENCRYPTION_KEY:-}
+  HOOKFLOW_ADMIN_TOKEN: ${HOOKFLOW_ADMIN_TOKEN:-${ADMIN_TOKEN:-}}
+  INGEST_RATE_LIMIT_PER_MINUTE: ${INGEST_RATE_LIMIT_PER_MINUTE:-600}
+  MAX_ENDPOINTS_PER_TENANT: ${MAX_ENDPOINTS_PER_TENANT:-100}
+
 services:
   postgres:
     image: postgres:15-alpine
     environment:
-      POSTGRES_DB: hookflow
-      POSTGRES_USER: hookflow
-      POSTGRES_PASSWORD: hookflow
+      POSTGRES_DB: ${POSTGRES_DB:-hookflow}
+      POSTGRES_USER: ${POSTGRES_USER:-hookflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hookflow}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U hookflow"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   redis:
     image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "6379:6379"
     volumes:
@@ -27,33 +41,63 @@ services:
       timeout: 5s
       retries: 5
 
+  migrate:
+    image: hookflow:${HOOKFLOW_IMAGE_TAG:-local}
+    build: *hookflow-build
+    command: ["alembic", "upgrade", "head"]
+    environment: *hookflow-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   app:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
+    image: hookflow:${HOOKFLOW_IMAGE_TAG:-local}
+    build: *hookflow-build
     ports:
       - "8000:8000"
-    environment:
-      - DATABASE_URL=postgresql+psycopg://hookflow:hookflow@postgres:5432/hookflow
-      - REDIS_URL=redis://redis:6379/0
+    environment: *hookflow-environment
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   worker:
+    image: hookflow:${HOOKFLOW_IMAGE_TAG:-local}
+    build: *hookflow-build
+    command: ["python", "-m", "app.worker"]
+    environment: *hookflow-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  dashboard:
+    profiles: [dashboard]
     build:
       context: ..
-      dockerfile: docker/Dockerfile
-    command: python -m app.worker
+      dockerfile: dashboard/Dockerfile
+    ports:
+      - "3000:3000"
     environment:
-      - DATABASE_URL=postgresql+psycopg://hookflow:hookflow@postgres:5432/hookflow
-      - REDIS_URL=redis://redis:6379/0
+      HOOKFLOW_ENVIRONMENT: production
+      HOOKFLOW_API_URL: ${HOOKFLOW_API_URL:-http://app:8000}
+      HOOKFLOW_API_KEY: ${HOOKFLOW_API_KEY:-}
+      HOOKFLOW_ADMIN_TOKEN: ${HOOKFLOW_ADMIN_TOKEN:-}
+      HOOKFLOW_TENANT_ID: ${HOOKFLOW_TENANT_ID:-}
+      DASHBOARD_USERNAME: ${DASHBOARD_USERNAME:-admin}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
     depends_on:
-      - postgres
-      - redis
+      app:
+        condition: service_started
     restart: unless-stopped
 
 volumes:

@@ -1,47 +1,70 @@
-"""Pydantic request/response schemas (Pydantic v2)."""
+"""Pydantic request and response schemas."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from .egress import validate_endpoint_url
 
 
 class EndpointCreate(BaseModel):
     url: str = Field(min_length=8, max_length=2000)
-    secret: str | None = Field(default=None, max_length=128)
-    rate_limit_per_minute: int = Field(default=60, ge=1, le=10000)
+    secret: str | None = Field(default=None, min_length=1, max_length=128)
+    rate_limit_per_minute: int | None = Field(default=None, ge=1, le=10000)
 
     @field_validator("url")
     @classmethod
-    def must_be_http(cls, v: str) -> str:
-        if not (v.startswith("http://") or v.startswith("https://")):
-            raise ValueError("url must start with http:// or https://")
-        return v
+    def public_http_url(cls, value: str) -> str:
+        return validate_endpoint_url(value)
+
+
+class EndpointPatch(BaseModel):
+    url: str | None = Field(default=None, min_length=8, max_length=2000)
+    rate_limit_per_minute: int | None = Field(default=None, ge=1, le=10000)
+    enabled: bool | None = None
+
+    @field_validator("url")
+    @classmethod
+    def public_http_url(cls, value: str | None) -> str | None:
+        return validate_endpoint_url(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def at_least_one_change(self) -> EndpointPatch:
+        if not self.model_fields_set:
+            raise ValueError("provide at least one field to update")
+        if any(
+            field in self.model_fields_set and getattr(self, field) is None
+            for field in ("url", "rate_limit_per_minute", "enabled")
+        ):
+            raise ValueError("endpoint patch fields must not be null")
+        return self
 
 
 class EndpointOut(BaseModel):
     id: str
     url: str
     rate_limit_per_minute: int
+    enabled: bool
     created_at: str
 
 
 class EndpointCreated(EndpointOut):
-    """Creation response only.
+    """Creation response carrying the plaintext signing secret exactly once."""
 
-    Carries the plaintext secret exactly once, because the receiver needs it to
-    verify HMAC signatures. It is never returned again — at rest the value is
-    encrypted, and there is deliberately no endpoint that will hand it back.
-    """
+    secret: str
 
+
+class EndpointRotated(BaseModel):
+    id: str
     secret: str
 
 
 class EventCreate(BaseModel):
     endpoint_id: str = Field(min_length=1, max_length=64)
     payload: dict[str, Any]
-    idempotency_key: str | None = Field(default=None, max_length=128)
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class EventOut(BaseModel):

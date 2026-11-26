@@ -6,16 +6,15 @@ which is exactly how a race window survives a refactor.
 """
 
 import threading
-from sqlalchemy import text
 
 import httpx
 import pytest
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from app.config import Settings
 from app.ratelimit import RateLimiter
 from app.security import sign_payload, verify_signature
-
 
 # --- idempotency: the database is the source of truth ----------------------
 
@@ -29,7 +28,7 @@ def test_duplicate_key_rejected_by_constraint(client):
     from app.db import Endpoint, Event
     from app.main import SessionLocal
 
-    ep = client.post("/v1/endpoints", json={"url": "https://example.com/wh"}).json()
+    client.post("/v1/endpoints", json={"url": "https://example.com/wh"})
 
     from app.db import Tenant, new_id
 
